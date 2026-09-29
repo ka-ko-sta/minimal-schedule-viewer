@@ -130,3 +130,14 @@ Data reloads on attachment, reconnection, when returning to a visible browser ta
 ## Development
 
 No build step. Run `node --check minimal-schedule-viewer.js` and `node --test minimal-schedule-viewer.test.cjs`. Tests cover configuration, parsing, request handling, and rendering with a simulated HA environment. A live HA smoke test is still recommended before release.
+
+## Screenshots
+
+### Single schedule
+![Single schedule](screens/single_schedule.png)
+
+### Multi-card overview
+![Multiple schedules](screens/multi_card_overview.png)
+
+### Error detection
+![Missing and unknown values](screens/error_detection.png)
