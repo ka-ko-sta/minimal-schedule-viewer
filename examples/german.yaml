@@ -1,0 +1,28 @@
+type: custom:minimal-schedule-viewer
+entity: schedule.zeitplan_thermostat_kinderzimmer_1_auser_haus
+
+data_key: modus
+
+days:
+  - Mo
+  - Di
+  - Mi
+  - Do
+  - Fr
+  - Sa
+  - So
+
+states:
+  komfort:
+    label: Komfort
+    color: "#2e8540"
+  reduziert:
+    label: Reduziert
+    color: "#1976c9"
+  abwesend:
+    label: Abwesend
+    color: "#f39a00"
+
+grid_options:
+  columns: 16
+  rows: auto

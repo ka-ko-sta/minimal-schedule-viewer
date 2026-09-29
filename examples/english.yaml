@@ -1,0 +1,14 @@
+type: custom:minimal-schedule-viewer
+entity: schedule.living_room
+data_key: mode
+states:
+  comfort:
+    label: Comfort
+    color: "#2e8540"
+  away:
+    label: Away
+    color: "#f39a00"
+# Omitted days defaults to Mon, Tue, Wed, Thu, Fri, Sat, Sun.
+grid_options:
+  columns: 16
+  rows: auto
