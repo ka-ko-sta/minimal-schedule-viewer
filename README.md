@@ -129,7 +129,7 @@ Data reloads on attachment, reconnection, when returning to a visible browser ta
 
 ## Development
 
-No build step. Run `node --check minimal-schedule-viewer.js` and `node --test minimal-schedule-viewer.test.cjs`. Tests cover configuration, parsing, request handling, and rendering with a simulated HA environment. A live HA smoke test is still recommended before release.
+No build step. Run `node --check minimal-schedule-viewer.js` and `node --test minimal-schedule-viewer.test.cjs`. Tests cover configuration, parsing, request handling, and rendering with a simulated HA environment. A live Manually tested in Firefox, Chrome, and the Home Assistant Companion apps on Android and iOS.
 
 ## Screenshots
 
