@@ -1,6 +1,6 @@
 # Minimal Schedule Viewer
 
-Version **0.1.4**. A lightweight Lovelace custom card for native Home Assistant schedule helpers. Shows a compact, color-coded weekly timeline and keeps editing in Home Assistant's standard interface.
+Version **0.1.8**. A lightweight Lovelace custom card for native Home Assistant schedule helpers. Shows a compact, color-coded weekly timeline and keeps editing in Home Assistant's standard interface.
 
 ## Features
 
@@ -9,16 +9,15 @@ Version **0.1.4**. A lightweight Lovelace custom card for native Home Assistant 
 - Automatic title from the entity's `friendly_name`.
 - Per-card YAML mappings, translated day labels, and visible data errors.
 - Light/dark theme support, no dependencies, build step, HACS, or animations.
+- Highlights the current weekday and shows a minute-updated local-time line.
 
 ## Manual installation
 
 1. Copy `minimal-schedule-viewer.js` to `/config/www/minimal-schedule-viewer.js`.
-2. In **Settings → Dashboards → Resources**, add:
-   - URL: `/local/minimal-schedule-viewer.js`
-   - Type: **JavaScript Module**
+2. In **Settings → Dashboards → Resources**, add `/local/minimal-schedule-viewer.js?v=0.1.8` as a **JavaScript Module**.
 3. Reload your browser and add a manual card using the example below.
 
-Enable Advanced Mode in your user profile if Resources is hidden. If you just created the `www` directory for the first time, restart Home Assistant once. Replacing an existing JS file does not require an HA restart: hard-reload the browser. If an old copy persists, change the resource URL to `/local/minimal-schedule-viewer.js?v=0.1.4` (increment the suffix for subsequent updates), then reload the page.
+Enable Advanced Mode in your user profile if Resources is hidden. If you just created the `www` directory for the first time, restart Home Assistant once. Copy the updated JS file to `/config/www/minimal-schedule-viewer.js`, then hard-reload the browser. When updating again, increment the resource URL's `v` suffix to invalidate cached copies.
 
 Requires a native `schedule.*` entity and a Home Assistant version exposing [`schedule.get_schedule`](https://www.home-assistant.io/actions/schedule.get_schedule/) with response data. The signed-in user needs permission to read that schedule. No `schedule/list` fallback or separate integration is used.
 
@@ -38,6 +37,9 @@ days:
   - Fr
   - Sa
   - So
+
+show_today: true
+show_current_time: true
 
 states:
   komfort:
@@ -87,7 +89,13 @@ Both examples are also available in `examples/`.
 | `data_key` | Yes | Exact key in each block's `data` object |
 | `states` | Yes | Value-to-label/color mapping; `{}` makes all present values unknown |
 | `days` | No | Seven non-empty strings, Monday first; defaults to `Mon, Tue, Wed, Thu, Fri, Sat, Sun` |
+| `show_today` | No | Show the current-day highlight; defaults to `true` |
+| `show_current_time` | No | Show the current-time line across the week; defaults to `true` |
+| `highlight_today_color` | No | Color for the current-day highlight; defaults to Home Assistant's primary color |
+| `current-time_color` | No | Color for the current-time line; defaults to Home Assistant's primary color |
 | `grid_options` | No | Home Assistant dashboard layout settings |
+
+Set either visibility option to the YAML boolean `false` to hide that marker; omit it or set it to `true` to show it. Do not quote boolean values. Marker colors accept `#RGB` or `#RRGGBB`; omit a color to follow the active Home Assistant theme.
 
 `data_key: modus` reads `data.modus` in each schedule block. It is a literal field name, not a dotted path. For example, a block may contain:
 
@@ -118,7 +126,7 @@ Empty space means no configured block. Labels and times truncate horizontally wh
 
 The `>` button opens Home Assistant's native entity dialog, the same entry point used by the helper list. Depending on the HA version, choose its edit/settings control to reach the schedule editor. The card does not save anything. YAML-defined schedules remain subject to HA's own editing limitations and permissions.
 
-Data reloads on attachment, reconnection, when returning to a visible browser tab, and once after closing the native dialog opened by this card. There is no periodic polling. Edits made elsewhere may require reopening/reloading the dashboard. The native dialog close event is a frontend integration point and may change in future HA releases.
+The current weekday is highlighted, with a line marking the local current time. The clock updates every minute without reloading schedule data. Schedule data reloads on attachment, reconnection, when returning to a visible browser tab, and once after closing the native dialog opened by this card. There is no periodic schedule polling. Edits made elsewhere may require reopening/reloading the dashboard. The native dialog close event is a frontend integration point and may change in future HA releases.
 
 ## What this card does NOT do
 
@@ -141,3 +149,6 @@ No build step. Run `node --check minimal-schedule-viewer.js` and `node --test mi
 
 ### Error detection
 ![Missing and unknown values](screens/error_detection.png)
+
+### Today and Current time
+![Today and current time](screens/today_currenttime.png)

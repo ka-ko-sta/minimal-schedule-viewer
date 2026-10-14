@@ -1,11 +1,11 @@
-/* Minimal Schedule Viewer 0.1.4 — no dependencies. Install as a JavaScript module.
+/* Minimal Schedule Viewer 0.1.8 — no dependencies. Install as a JavaScript module.
  * type: custom:minimal-schedule-viewer
  * entity: schedule.zeitplan_thermostate_wohnbereich
  * Reads schedule.get_schedule; never writes schedule data.
  */
 (() => {
   "use strict";
-  const VERSION = "0.1.4";
+  const VERSION = "0.1.8";
   const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   const DEFAULT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   // Optional source-level typography adjustments.
@@ -32,6 +32,35 @@
   }
   const formatTime = (v) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(Math.floor(v % 60)).padStart(2, "0")}`;
   const validColor = (value) => typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value);
+  function resolveTimeZone(hass) {
+    return hass?.config?.time_zone || hass?.config?.timezone || hass?.locale?.timezone || hass?.locale?.time_zone || Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  }
+  function getCurrentTimeInZone(date = new Date(), timeZone) {
+    const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone) {
+      const localDate = new Date(date);
+      return { today: (localDate.getDay() + 6) % 7, currentMinute: localDate.getHours() * 60 + localDate.getMinutes() };
+    }
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: zone,
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(date);
+      const fields = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+      const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(fields.weekday);
+      const minute = Number(fields.hour || 0) * 60 + Number(fields.minute || 0);
+      return { today: weekday >= 0 ? weekday : (new Date(date).getDay() + 6) % 7, currentMinute: minute };
+    } catch {
+      const localDate = new Date(date);
+      return { today: (localDate.getDay() + 6) % 7, currentMinute: localDate.getHours() * 60 + localDate.getMinutes() };
+    }
+  }
+  function getCurrentTimeTop(currentMinute, offset = 30, dayHeight = 288) {
+    return offset + (currentMinute / 1440) * dayHeight;
+  }
   function normalizeConfig(config) {
     if (!object(config) || typeof config.entity !== "string" || !/^schedule\.[a-z0-9_]+$/.test(config.entity)) {
       throw new Error("Minimal Schedule Viewer: entity must be a schedule entity ID.");
@@ -43,6 +72,17 @@
     if (!Array.isArray(days) || days.length !== 7 || days.some(day => typeof day !== "string" || !day.trim())) {
       throw new Error("Minimal Schedule Viewer: days must contain seven non-empty strings, Monday first.");
     }
+    const showToday = config.show_today === undefined ? true : config.show_today;
+    const showCurrentTime = config.show_current_time === undefined ? true : config.show_current_time;
+    if (typeof showToday !== "boolean" || typeof showCurrentTime !== "boolean") {
+      throw new Error("Minimal Schedule Viewer: show_today and show_current_time must be booleans.");
+    }
+    const todayColor = config.highlight_today_color;
+    const currentTimeColor = config["current_time_color"] ?? config["current-time_color"];
+    if ((todayColor !== undefined && !validColor(todayColor)) ||
+        (currentTimeColor !== undefined && !validColor(currentTimeColor))) {
+      throw new Error("Minimal Schedule Viewer: highlight_today_color and current_time_color must be #RGB or #RRGGBB colors.");
+    }
     if (!object(config.states)) throw new Error("Minimal Schedule Viewer: states must be a mapping.");
     const states = Object.create(null);
     for (const [value, entry] of Object.entries(config.states)) {
@@ -51,7 +91,7 @@
       }
       states[value] = { label: entry.label, color: entry.color };
     }
-    return { entity: config.entity, data_key: config.data_key, days: [...days], states };
+    return { entity: config.entity, data_key: config.data_key, days: [...days], states, show_today: showToday, show_current_time: showCurrentTime, highlight_today_color: todayColor, "current_time_color": currentTimeColor };
   }
   // Choose black or white text using relative luminance for both HA themes.
   function foreground(hex) {
@@ -109,13 +149,18 @@
     button:focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
     .status,.errors{margin:6px 12px;font-size:12px;overflow-wrap:anywhere}
     .status{color:var(--secondary-text-color)}.errors{background:#b71c1c;color:#ffffff;padding:8px;border-radius:6px}.errors p{margin:3px 0}
-    .scroll{overflow-x:auto;padding:0 8px 13px}
-    .week{min-width:280px;display:grid;grid-template-columns:44px repeat(7,minmax(0,1fr));padding-top:4px}
+    .scroll{overflow-x:auto;overflow-y:visible;padding:0 8px 13px}
+    .week{min-width:280px;display:grid;grid-template-columns:44px repeat(7,minmax(0,1fr));padding-top:4px;position:relative;z-index:0;isolation:isolate}
     .heading{text-align:center;font-size:13px;font-weight:600;height:26px;white-space:nowrap}
+    .heading.today{color:var(--today-marker-color,var(--primary-color,#03a9f4));background:color-mix(in srgb,var(--today-marker-color,var(--primary-color,#03a9f4)) 18%,transparent);border-bottom:2px solid var(--today-marker-color,var(--primary-color,#03a9f4))}
     .axis,.day{height:288px;position:relative}
     .axis{position:sticky;left:0;z-index:2;background:var(--ha-card-background,var(--card-background-color,#fff))}
     .tick{position:absolute;right:4px;transform:translateY(-50%);font-size:12px;color:var(--primary-text-color)}
     .day{border-left:1px solid var(--divider-color,#ddd);border-bottom:1px solid var(--divider-color,#ddd);background:repeating-linear-gradient(to bottom,var(--divider-color,#ddd) 0,var(--divider-color,#ddd) 1px,transparent 1px,transparent 36px)}
+    .day.today{background-color:color-mix(in srgb,var(--primary-color,#03a9f4) 14%,transparent)}
+    .day.today::after{content:"";position:absolute;inset:0;z-index:4;border-left:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));border-right:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));pointer-events:none}
+    .current-time{position:absolute;left:44px;right:0;z-index:10;height:2px;background:var(--current-time-color,var(--primary-color,#03a9f4));pointer-events:none}
+    .current-time::before{content:"";position:absolute;left:-3px;top:-3px;width:8px;height:8px;border-radius:50%;background:inherit}
     .block{position:absolute;left:1px;right:1px;border-radius:2px;padding:0 2px;overflow:hidden;text-align:left;font-size:13px;line-height:14px;cursor:default;color:white}
     .schedule_name,.schedule_time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     ${TEXT_STYLES}
@@ -170,6 +215,7 @@
     connectedCallback() {
       this._resizeObserver = new ResizeObserver(() => this._fitTimes());
       this._observeSizes();
+      this._clockTimer = setInterval(() => this._render(), 60000);
       document.addEventListener("visibilitychange", this._refresh);
       window.addEventListener("dialog-closed", this._dialogClosed);
       void this._load();
@@ -177,6 +223,7 @@
     disconnectedCallback() {
       this._resizeObserver?.disconnect();
       cancelAnimationFrame(this._fitFrame);
+      clearInterval(this._clockTimer);
       document.removeEventListener("visibilitychange", this._refresh);
       window.removeEventListener("dialog-closed", this._dialogClosed);
       this._editing = false;
@@ -239,6 +286,17 @@
       if (!this._config) return;
       const entity = this._hass?.states[this._config.entity];
       const title = entity?.attributes?.friendly_name || this._config.entity;
+      const timeZone = resolveTimeZone(this._hass);
+      const { today, currentMinute } = getCurrentTimeInZone(new Date(), timeZone);
+      const week = this.shadowRoot.querySelector(".week");
+      const firstDay = this.shadowRoot.querySelector(".day");
+      const offset = week && firstDay ? firstDay.getBoundingClientRect().top - week.getBoundingClientRect().top : 30;
+      const dayHeight = firstDay?.getBoundingClientRect().height || 288;
+      const currentTop = getCurrentTimeTop(currentMinute, offset, dayHeight);
+      const markerColors = [
+        this._config.highlight_today_color && `--today-marker-color:${this._config.highlight_today_color}`,
+        (this._config["current_time_color"] ?? this._config["current-time_color"]) && `--current-time-color:${this._config["current_time_color"] ?? this._config["current-time_color"]}`,
+      ].filter(Boolean).join(";");
       const errors = this._week?.flatMap((day) => day.errors) || [];
       const issue = !this._hass ? "Waiting for Home Assistant …" : !entity ? `Entity ${this._config.entity} not found.`
         : this._hass.connected === false ? "Disconnected from Home Assistant."
@@ -250,13 +308,13 @@
         ${issue ? `<div class="errors" role="alert">${escape(issue)}${this._week ? " Showing the last successfully loaded schedule." : ""}</div>` : ""}
         ${!this._week ? `<div class="status" role="status">${this._loading ? "Loading schedule …" : "No schedule loaded yet."}</div>` : ""}
         ${errors.length ? `<div class="errors" role="alert">${errors.map((e) => `<p>${escape(e)}</p>`).join("")}</div>` : ""}
-        ${this._week ? `<div class="scroll" tabindex="0" aria-label="Weekly schedule, horizontally scrollable"><div class="week">
-          <div></div>${this._config.days.map(name => `<div class="heading day_style">${escape(name)}</div>`).join("")}
+        ${this._week ? `<div class="scroll" tabindex="0" aria-label="Weekly schedule, horizontally scrollable"><div class="week" style="${markerColors}">
+          <div></div>${this._config.days.map((name, index) => `<div class="heading day_style${this._config.show_today && index === today ? " today" : ""}">${escape(name)}</div>`).join("")}
           <div class="axis">${Array.from({ length: 9 }, (_, index) => index * 3).map((hour) => `<span class="tick hour_style" style="top:${hour / 24 * 100}%">${String(hour).padStart(2, "0")}:00</span>`).join("")}</div>
-          ${this._week.map((day) => `<div class="day" aria-label="${escape(day.name)}">${day.blocks.map((block) => {
+          ${this._week.map((day, index) => `<div class="day${this._config.show_today && index === today ? " today" : ""}" aria-label="${escape(day.name)}">${day.blocks.map((block) => {
             const label = `${day.name}, ${formatTime(block.start)}–${formatTime(block.end)}: ${block.label}${block.detail ? ` (${block.detail})` : ""}`;
             return `<div class="block ${block.kind}" style="background:${block.color};color:${foreground(block.color)};top:${block.start / 1440 * 100}%;height:${(block.end - block.start) / 1440 * 100}%" title="${escape(label)}" aria-label="${escape(label)}"><strong class="schedule_name">${escape(block.label)}</strong><small class="schedule_time">${formatTime(block.start)}–${formatTime(block.end)}</small></div>`;
-          }).join("")}</div>`).join("")}</div></div>` : ""}
+          }).join("")}</div>`).join("")}${this._config.show_current_time ? `<div class="current-time" style="top:${currentTop}px" aria-label="Current time ${formatTime(currentMinute)}" title="Current time ${formatTime(currentMinute)}"></div>` : ""}</div></div>` : ""}
       </ha-card>`;
       const scroller = this.shadowRoot.querySelector(".scroll");
       if (scroller) scroller.scrollLeft = scroll;
