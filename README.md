@@ -92,7 +92,7 @@ Both examples are also available in `examples/`.
 | `show_today` | No | Show the current-day highlight; defaults to `true` |
 | `show_current_time` | No | Show the current-time line across the week; defaults to `true` |
 | `highlight_today_color` | No | Color for the current-day highlight; defaults to Home Assistant's primary color |
-| `current-time_color` | No | Color for the current-time line; defaults to Home Assistant's primary color |
+| `current_time_color` | No | Color for the current-time line; defaults to Home Assistant's primary color |
 | `grid_options` | No | Home Assistant dashboard layout settings |
 
 Set either visibility option to the YAML boolean `false` to hide that marker; omit it or set it to `true` to show it. Do not quote boolean values. Marker colors accept `#RGB` or `#RRGGBB`; omit a color to follow the active Home Assistant theme.
