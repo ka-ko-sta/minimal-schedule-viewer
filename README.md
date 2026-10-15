@@ -1,6 +1,6 @@
 # Minimal Schedule Viewer
 
-Version **0.1.8**. A lightweight Lovelace custom card for native Home Assistant schedule helpers. Shows a compact, color-coded weekly timeline and keeps editing in Home Assistant's standard interface.
+Version **0.2.0**. A lightweight Lovelace custom card for native Home Assistant schedule helpers. Shows a compact, color-coded weekly timeline and keeps editing in Home Assistant's standard interface.
 
 ## Features
 
