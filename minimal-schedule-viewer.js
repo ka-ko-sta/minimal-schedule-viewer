@@ -1,11 +1,11 @@
-/* Minimal Schedule Viewer 0.1.9 — no dependencies. Install as a JavaScript module.
+/* Minimal Schedule Viewer 0.2.0 — no dependencies. Install as a JavaScript module.
  * type: custom:minimal-schedule-viewer
  * entity: schedule.zeitplan_thermostate_wohnbereich
  * Reads schedule.get_schedule; never writes schedule data.
  */
 (() => {
   "use strict";
-  const VERSION = "0.1.9";
+  const VERSION = "0.2.0";
   const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   const DEFAULT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   // Optional source-level typography adjustments.
