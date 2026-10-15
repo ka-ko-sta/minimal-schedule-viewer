@@ -8,8 +8,26 @@ Version **0.1.8**. A lightweight Lovelace custom card for native Home Assistant 
 - Blocks proportional to duration, with a label and start/end time.
 - Automatic title from the entity's `friendly_name`.
 - Per-card YAML mappings, translated day labels, and visible data errors.
-- Light/dark theme support, no dependencies, build step, HACS, or animations.
+- Light/dark theme support, no dependencies, build step, or animations. HACS installation supported.
 - Highlights the current weekday and shows a minute-updated local-time line.
+
+## Installation via HACS
+
+1. Open **HACS** in Home Assistant.
+2. Open the menu (three dots) and select **Custom repositories**.
+3. Add `https://github.com/ka-ko-sta/minimal-schedule-viewer` as a **Dashboard** repository.
+4. Search for **Minimal Schedule Viewer** in HACS and download the latest release.
+5. HACS should automatically register the JavaScript resource. If needed, check **Settings → Dashboards → Resources**.
+6. Add a manual dashboard card using the YAML example below.
+
+**Note:** If you previously installed the card manually, remove the old `/local/minimal-schedule-viewer.js` entry from your dashboard resources to avoid loading the card twice.
+
+The HACS-managed resource is located at:
+
+`/hacsfiles/minimal-schedule-viewer/minimal-schedule-viewer.js`
+
+Updates can be installed directly through HACS.
+
 
 ## Manual installation
 
