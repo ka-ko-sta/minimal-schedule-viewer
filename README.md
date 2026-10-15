@@ -6,6 +6,8 @@ Version **0.1.8**. A lightweight Lovelace custom card for native Home Assistant 
 
 - Monday through Sunday, 00:00–24:00, with ticks every three hours.
 - Blocks proportional to duration, with a label and start/end time.
+- Matching sections with identical times and data merge across adjacent days into one continuous block.
+- Consecutive sections with the same data merge vertically within each day.
 - Automatic title from the entity's `friendly_name`.
 - Per-card YAML mappings, translated day labels, and visible data errors.
 - Light/dark theme support, no dependencies, build step, or animations. HACS installation supported.
@@ -107,13 +109,19 @@ Both examples are also available in `examples/`.
 | `data_key` | Yes | Exact key in each block's `data` object |
 | `states` | Yes | Value-to-label/color mapping; `{}` makes all present values unknown |
 | `days` | No | Seven non-empty strings, Monday first; defaults to `Mon, Tue, Wed, Thu, Fri, Sat, Sun` |
+| `merge_adjacent_days` | No | Merge matching sections across adjacent days; defaults to `true` |
+| `merge_adjacent_times` | No | Merge consecutive sections with matching data within a day; defaults to `true` |
+| `label_alignment` | No | Align the section label and time text horizontally: `left`, `center`, or `right`; defaults to `left` |
+| `label_vertical_alignment` | No | Align the label and time text vertically: `top`, `center`, or `bottom`; defaults to `top` |
 | `show_today` | No | Show the current-day highlight; defaults to `true` |
 | `show_current_time` | No | Show the current-time line across the week; defaults to `true` |
 | `highlight_today_color` | No | Color for the current-day highlight; defaults to Home Assistant's primary color |
 | `current_time_color` | No | Color for the current-time line; defaults to Home Assistant's primary color |
 | `grid_options` | No | Home Assistant dashboard layout settings |
 
-Set either visibility option to the YAML boolean `false` to hide that marker; omit it or set it to `true` to show it. Do not quote boolean values. Marker colors accept `#RGB` or `#RRGGBB`; omit a color to follow the active Home Assistant theme.
+Set `merge_adjacent_days` to the YAML boolean `false` to keep each day's sections separate; set `merge_adjacent_times` to `false` to keep consecutive same-day sections separate. Both default to `true`. Time sections merge only when one ends exactly as the next begins and their configured data values match, so gaps are preserved. Set either visibility option to the YAML boolean `false` to hide that marker; omit it or set it to `true` to show it. Do not quote boolean values. Marker colors accept `#RGB` or `#RRGGBB`; omit a color to follow the active Home Assistant theme.
+
+Set `label_alignment` to `left`, `center`, or `right` to align the label and time text horizontally; it defaults to `left`. Set `label_vertical_alignment` to `top`, `center`, or `bottom` to position the two lines vertically within each block; it defaults to `top`.
 
 `data_key: modus` reads `data.modus` in each schedule block. It is a literal field name, not a dotted path. For example, a block may contain:
 

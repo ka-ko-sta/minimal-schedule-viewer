@@ -1,11 +1,11 @@
-/* Minimal Schedule Viewer 0.1.8 — no dependencies. Install as a JavaScript module.
+/* Minimal Schedule Viewer 0.1.9 — no dependencies. Install as a JavaScript module.
  * type: custom:minimal-schedule-viewer
  * entity: schedule.zeitplan_thermostate_wohnbereich
  * Reads schedule.get_schedule; never writes schedule data.
  */
 (() => {
   "use strict";
-  const VERSION = "0.1.8";
+  const VERSION = "0.1.9";
   const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   const DEFAULT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   // Optional source-level typography adjustments.
@@ -74,8 +74,18 @@
     }
     const showToday = config.show_today === undefined ? true : config.show_today;
     const showCurrentTime = config.show_current_time === undefined ? true : config.show_current_time;
-    if (typeof showToday !== "boolean" || typeof showCurrentTime !== "boolean") {
-      throw new Error("Minimal Schedule Viewer: show_today and show_current_time must be booleans.");
+    const mergeAdjacentDays = config.merge_adjacent_days === undefined ? true : config.merge_adjacent_days;
+    const mergeAdjacentTimes = config.merge_adjacent_times === undefined ? true : config.merge_adjacent_times;
+    const labelAlignment = config.label_alignment === undefined ? "left" : config.label_alignment;
+    const labelVerticalAlignment = config.label_vertical_alignment === undefined ? "top" : config.label_vertical_alignment;
+    if (typeof showToday !== "boolean" || typeof showCurrentTime !== "boolean" || typeof mergeAdjacentDays !== "boolean" || typeof mergeAdjacentTimes !== "boolean") {
+      throw new Error("Minimal Schedule Viewer: show_today, show_current_time, merge_adjacent_days, and merge_adjacent_times must be booleans.");
+    }
+    if (!["left", "center", "right"].includes(labelAlignment)) {
+      throw new Error("Minimal Schedule Viewer: label_alignment must be left, center, or right.");
+    }
+    if (!["top", "center", "bottom"].includes(labelVerticalAlignment)) {
+      throw new Error("Minimal Schedule Viewer: label_vertical_alignment must be top, center, or bottom.");
     }
     const todayColor = config.highlight_today_color;
     const currentTimeColor = config["current_time_color"] ?? config["current-time_color"];
@@ -91,7 +101,7 @@
       }
       states[value] = { label: entry.label, color: entry.color };
     }
-    return { entity: config.entity, data_key: config.data_key, days: [...days], states, show_today: showToday, show_current_time: showCurrentTime, highlight_today_color: todayColor, "current_time_color": currentTimeColor };
+    return { entity: config.entity, data_key: config.data_key, days: [...days], states, show_today: showToday, show_current_time: showCurrentTime, merge_adjacent_days: mergeAdjacentDays, merge_adjacent_times: mergeAdjacentTimes, label_alignment: labelAlignment, label_vertical_alignment: labelVerticalAlignment, highlight_today_color: todayColor, "current_time_color": currentTimeColor };
   }
   // Choose black or white text using relative luminance for both HA themes.
   function foreground(hex) {
@@ -105,13 +115,13 @@
   function mode(data, config) {
     const value = object(data) && Object.hasOwn(data, config.data_key) ? data[config.data_key] : undefined;
     if (value == null || (typeof value === "string" && !value.trim())) {
-      return { kind: "missing", label: "Missing value", color: "#b71c1c", detail: `${config.data_key} is missing or empty.` };
+      return { kind: "missing", label: "Missing value", color: "#b71c1c", detail: `${config.data_key} is missing or empty.`, mergeKey: "missing" };
     }
     const key = text(value);
     if (["string", "number", "boolean"].includes(typeof value) && Object.hasOwn(config.states, key)) {
-      return { kind: "mapped", ...config.states[key] };
+      return { kind: "mapped", ...config.states[key], mergeKey: `${typeof value}:${key}` };
     }
-    return { kind: "unknown", label: key, color: "#b71c1c" };
+    return { kind: "unknown", label: key, color: "#b71c1c", mergeKey: `${typeof value}:${key}` };
   }
   function parseWeek(raw, config) {
     if (!object(raw)) throw new Error("Invalid weekly schedule response.");
@@ -152,19 +162,58 @@
     .scroll{overflow-x:auto;overflow-y:visible;padding:0 8px 13px}
     .week{min-width:280px;display:grid;grid-template-columns:44px repeat(7,minmax(0,1fr));padding-top:4px;position:relative;z-index:0;isolation:isolate}
     .heading{text-align:center;font-size:13px;font-weight:600;height:26px;white-space:nowrap}
-    .heading.today{color:var(--today-marker-color,var(--primary-color,#03a9f4));background:color-mix(in srgb,var(--today-marker-color,var(--primary-color,#03a9f4)) 18%,transparent);border-bottom:2px solid var(--today-marker-color,var(--primary-color,#03a9f4))}
+    .heading.today{color:var(--today-marker-color,var(--primary-color,#03a9f4));background:color-mix(in srgb,var(--today-marker-color,var(--primary-color,#03a9f4)) 18%,transparent)}
     .axis,.day{height:288px;position:relative}
     .axis{position:sticky;left:0;z-index:2;background:var(--ha-card-background,var(--card-background-color,#fff))}
     .tick{position:absolute;right:4px;transform:translateY(-50%);font-size:12px;color:var(--primary-text-color)}
     .day{border-left:1px solid var(--divider-color,#ddd);border-bottom:1px solid var(--divider-color,#ddd);background:repeating-linear-gradient(to bottom,var(--divider-color,#ddd) 0,var(--divider-color,#ddd) 1px,transparent 1px,transparent 36px)}
-    .day.today{background-color:color-mix(in srgb,var(--primary-color,#03a9f4) 14%,transparent)}
     .day.today::after{content:"";position:absolute;inset:0;z-index:4;border-left:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));border-right:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));pointer-events:none}
     .current-time{position:absolute;left:44px;right:0;z-index:10;height:2px;background:var(--current-time-color,var(--primary-color,#03a9f4));pointer-events:none}
     .current-time::before{content:"";position:absolute;left:-3px;top:-3px;width:8px;height:8px;border-radius:50%;background:inherit}
-    .block{position:absolute;left:1px;right:1px;border-radius:2px;padding:0 2px;overflow:hidden;text-align:left;font-size:13px;line-height:14px;cursor:default;color:white}
-    .schedule_name,.schedule_time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .blocks-layer{position:absolute;left:44px;right:0;top:30px;height:288px;pointer-events:none;z-index:1}
+    .block{position:absolute;display:flex;flex-direction:column;justify-content:var(--schedule-label-vertical-alignment,flex-start);border-radius:2px;padding:0 2px;overflow:hidden;text-align:left;font-size:13px;line-height:14px;cursor:default;color:white;pointer-events:auto}
+    .today-overlay{position:absolute;top:0;bottom:0;width:calc(100% / 7);background:rgba(255,255,255,0.18);pointer-events:none;z-index:2}
+    .schedule_name,.schedule_time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:var(--schedule-label-alignment,left)}
     ${TEXT_STYLES}
   `;
+
+  function mergeWeekBlocks(week, mergeDays = true, mergeTimes = true) {
+    const days = week.map((day) => {
+      const blocks = [];
+      for (const block of day.blocks) {
+        const previous = blocks.at(-1);
+        if (mergeTimes && previous && previous.end === block.start &&
+            previous.mergeKey === block.mergeKey && previous.kind === block.kind) {
+          previous.end = block.end;
+        } else {
+          blocks.push({ ...block });
+        }
+      }
+      return { ...day, blocks };
+    });
+    if (!mergeDays) {
+      return days.flatMap((day, dayIndex) => day.blocks.map((block) => ({ block, startDay: dayIndex, endDay: dayIndex })));
+    }
+    const groups = [];
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
+      const day = days[dayIndex];
+      const used = new Set();
+      for (const group of groups) {
+        if (group.endDay !== dayIndex - 1) continue;
+        const matchIndex = day.blocks.findIndex((block, index) => !used.has(index) &&
+          block.start === group.block.start && block.end === group.block.end &&
+          block.mergeKey === group.block.mergeKey && block.kind === group.block.kind);
+        if (matchIndex >= 0) {
+          used.add(matchIndex);
+          group.endDay = dayIndex;
+        }
+      }
+      day.blocks.forEach((block, index) => {
+        if (!used.has(index)) groups.push({ block, startDay: dayIndex, endDay: dayIndex });
+      });
+    }
+    return groups;
+  }
 
   class MinimalScheduleViewer extends HTMLElement {
     static version = VERSION;
@@ -294,10 +343,13 @@
       const dayHeight = firstDay?.getBoundingClientRect().height || 288;
       const currentTop = getCurrentTimeTop(currentMinute, offset, dayHeight);
       const markerColors = [
+        `--schedule-label-alignment:${this._config.label_alignment}`,
+        `--schedule-label-vertical-alignment:${({ top: "flex-start", center: "center", bottom: "flex-end" })[this._config.label_vertical_alignment]}`,
         this._config.highlight_today_color && `--today-marker-color:${this._config.highlight_today_color}`,
         (this._config["current_time_color"] ?? this._config["current-time_color"]) && `--current-time-color:${this._config["current_time_color"] ?? this._config["current-time_color"]}`,
       ].filter(Boolean).join(";");
       const errors = this._week?.flatMap((day) => day.errors) || [];
+      const blocks = this._week ? mergeWeekBlocks(this._week, this._config.merge_adjacent_days, this._config.merge_adjacent_times) : [];
       const issue = !this._hass ? "Waiting for Home Assistant …" : !entity ? `Entity ${this._config.entity} not found.`
         : this._hass.connected === false ? "Disconnected from Home Assistant."
         : this._error || (entity.state === "unavailable" ? "Schedule entity is unavailable." : "");
@@ -311,10 +363,13 @@
         ${this._week ? `<div class="scroll" tabindex="0" aria-label="Weekly schedule, horizontally scrollable"><div class="week" style="${markerColors}">
           <div></div>${this._config.days.map((name, index) => `<div class="heading day_style${this._config.show_today && index === today ? " today" : ""}">${escape(name)}</div>`).join("")}
           <div class="axis">${Array.from({ length: 9 }, (_, index) => index * 3).map((hour) => `<span class="tick hour_style" style="top:${hour / 24 * 100}%">${String(hour).padStart(2, "0")}:00</span>`).join("")}</div>
-          ${this._week.map((day, index) => `<div class="day${this._config.show_today && index === today ? " today" : ""}" aria-label="${escape(day.name)}">${day.blocks.map((block) => {
-            const label = `${day.name}, ${formatTime(block.start)}–${formatTime(block.end)}: ${block.label}${block.detail ? ` (${block.detail})` : ""}`;
-            return `<div class="block ${block.kind}" style="background:${block.color};color:${foreground(block.color)};top:${block.start / 1440 * 100}%;height:${(block.end - block.start) / 1440 * 100}%" title="${escape(label)}" aria-label="${escape(label)}"><strong class="schedule_name">${escape(block.label)}</strong><small class="schedule_time">${formatTime(block.start)}–${formatTime(block.end)}</small></div>`;
-          }).join("")}</div>`).join("")}${this._config.show_current_time ? `<div class="current-time" style="top:${currentTop}px" aria-label="Current time ${formatTime(currentMinute)}" title="Current time ${formatTime(currentMinute)}"></div>` : ""}</div></div>` : ""}
+          ${this._week.map((day, index) => `<div class="day${this._config.show_today && index === today ? " today" : ""}" aria-label="${escape(day.name)}"></div>`).join("")}
+          <div class="blocks-layer">${blocks.map(({ block, startDay, endDay }) => {
+            const dayLabel = startDay === endDay ? this._week[startDay].name : `${this._week[startDay].name}–${this._week[endDay].name}`;
+            const span = endDay - startDay + 1;
+            const label = `${dayLabel}, ${formatTime(block.start)}–${formatTime(block.end)}: ${block.label}${block.detail ? ` (${block.detail})` : ""}`;
+            return `<div class="block ${block.kind}" style="left:calc(${startDay / 7 * 100}% + 1px);width:calc(${span / 7 * 100}% - 2px);top:${block.start / 1440 * 100}%;height:calc(${(block.end - block.start) / 1440 * 100}% - 2px);background:${block.color};color:${foreground(block.color)}" title="${escape(label)}" aria-label="${escape(label)}"><strong class="schedule_name">${escape(block.label)}</strong><small class="schedule_time">${formatTime(block.start)}–${formatTime(block.end)}</small></div>`;
+          }).join("")}${this._config.show_today ? `<div class="today-overlay" style="left:${today / 7 * 100}%;width:calc(100% / 7)" aria-hidden="true"></div>` : ""}</div>${this._config.show_current_time ? `<div class="current-time" style="top:${currentTop}px" aria-label="Current time ${formatTime(currentMinute)}" title="Current time ${formatTime(currentMinute)}"></div>` : ""}</div></div>` : ""}
       </ha-card>`;
       const scroller = this.shadowRoot.querySelector(".scroll");
       if (scroller) scroller.scrollLeft = scroll;

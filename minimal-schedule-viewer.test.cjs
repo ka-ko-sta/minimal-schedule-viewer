@@ -1,195 +1,403 @@
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-function setup(transform = s => s) {
-  let Card;
-  const root = { innerHTML: '', addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
-  const context = {
-    HTMLElement: class { constructor() { this.isConnected = true; } attachShadow() { this.shadowRoot = root; } dispatchEvent(e) { this.event = e; } },
-    customElements: { get() {}, define(name, cls) { Card = cls; } },
-    window: { addEventListener() {}, removeEventListener() {} },
-    document: { hidden: false, addEventListener() {}, removeEventListener() {} },
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    requestAnimationFrame: () => 1, cancelAnimationFrame() {},
-  };
-  vm.createContext(context);
-  // Expose pure parsing functions only inside the isolated test context.
-  vm.runInContext(transform(fs.readFileSync('minimal-schedule-viewer.js', 'utf8')).replace('  const STYLE =', '  globalThis.helpers = { time, mode, parseWeek, escape, normalizeConfig, foreground, getCurrentTimeInZone, resolveTimeZone, getCurrentTimeTop };\n  const STYLE ='), context);
-  const config = context.helpers.normalizeConfig({ entity: 'schedule.test', data_key: 'modus', states: {
-    komfort: { label: 'Komfort', color: '#2e8540' }, reduziert: { label: 'Reduziert', color: '#1976c9' }, abwesend: { label: 'Abwesend', color: '#f39a00' }
-  } });
-  return { ...context.helpers, Card, root, config,
-    mode: data => context.helpers.mode(data, config),
-    parseWeek: raw => context.helpers.parseWeek(raw, config) };
-}
-const empty = () => Object.fromEntries(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].map(d => [d, []]));
-test('time validation and HA midnight sentinel', () => {
-  const { time } = setup();
-  assert.equal(time('00:00'), 0);
-  assert.equal(time('24:00:00', true), 1440);
-  assert.equal(time('23:59:59.999999', true), 1440);
-  assert.equal(time('12:30:30'), 750.5);
-  for (const value of [undefined, null, '24:00', '25:00', '12:60', '10:00:60', '10:00oops', '1:00']) assert.ok(Number.isNaN(time(value)));
-});
-test('current day and minute follow the configured Home Assistant timezone', () => {
-  const { getCurrentTimeInZone, resolveTimeZone, getCurrentTimeTop } = setup();
-  const date = new Date(Date.UTC(2026, 9, 14, 17, 30, 0));
-  const utc = getCurrentTimeInZone(date, 'UTC');
-  const newYork = getCurrentTimeInZone(date, 'America/New_York');
-  const berlin = getCurrentTimeInZone(date, 'Europe/Berlin');
-  assert.equal(utc.today, 2); assert.equal(utc.currentMinute, 1050);
-  assert.equal(newYork.today, 2); assert.equal(newYork.currentMinute, 810);
-  assert.equal(berlin.today, 2); assert.equal(berlin.currentMinute, 1170);
-  assert.equal(resolveTimeZone({ config: { time_zone: 'Europe/Berlin' }, locale: { timezone: 'UTC' } }), 'Europe/Berlin');
-  assert.equal(resolveTimeZone({ config: { timezone: 'America/New_York' } }), 'America/New_York');
-  assert.equal(getCurrentTimeTop(720, 42, 300), 42 + 150);
-  assert.equal(getCurrentTimeTop(0, 42, 300), 42);
-});
-test('mode colors, missing values, strict typos, safe text', () => {
-  const { mode, escape } = setup();
-  ['komfort', 'reduziert', 'abwesend'].forEach((value, index) => assert.equal(mode({ modus: value }).kind, 'mapped'));
-  for (const data of [undefined, {}, { modus: '' }, { modus: null }, { modus: ' ' }]) assert.equal(mode(data).label, 'Missing value');
-  for (const value of ['Komfort', 'kom fort', 0, false, '<img onerror=alert(1)>']) assert.equal(mode({ modus: value }).kind, 'unknown');
-  assert.equal(escape('<script>"&'), '&lt;script&gt;&quot;&amp;');
-});
-test('full week, proportional bounds, invalid days/times and overlaps', () => {
-  const { parseWeek } = setup();
-  const raw = empty();
-  raw.monday = [{ from: '06:00', to: '08:00', data: { modus: 'komfort' } }, { from: '22:00', to: '24:00' }];
-  let week = parseWeek(raw);
-  assert.equal(week.length, 7);
-  assert.equal(week[0].blocks[0].end - week[0].blocks[0].start, 120);
-  assert.equal(week[0].blocks[1].label, 'Missing value');
-  raw.tuesday = [{ from: '22:00', to: '06:00' }, {}, null];
-  delete raw.wednesday;
-  raw.thursday = [{ from: '06:00', to: '08:00' }, { from: '07:00', to: '09:00' }];
-  week = parseWeek(raw);
-  assert.equal(week[1].errors.length, 3);
-  assert.equal(week[2].errors.length, 1);
-  assert.equal(week[3].errors.length, 1);
-  assert.equal(week[3].blocks[0].kind, 'error');
-  assert.throws(() => parseWeek(null));
-});
-test('official response request, error retention, HTML escaping and stale response protection', async () => {
-  const { Card, root, config, normalizeConfig } = setup();
-  const card = new Card();
-  card.setConfig(config);
-  const raw = empty();
-  raw.monday.push({ from: '00:00', to: '24:00', data: { modus: '<script>bad</script>' } });
-  card._hass = { connected: true, states: { 'schedule.test': { attributes: { friendly_name: '<b>Name</b>' } } },
-    callService: async (...args) => {
-      assert.equal(args[0], 'schedule'); assert.equal(args[1], 'get_schedule');
-      assert.equal(args[3].entity_id, 'schedule.test'); assert.equal(args[5], true);
-      return { response: { 'schedule.test': raw } };
-    } };
-  await card._load();
-  assert.equal(card._week.length, 7);
-  assert.ok(root.innerHTML.includes('&lt;b&gt;Name&lt;/b&gt;'));
-  assert.ok(!root.innerHTML.includes('<script>'));
-  assert.ok(root.innerHTML.includes('height:100%'));
-  assert.equal((root.innerHTML.match(/class="tick hour_style"/g) || []).length, 9);
-  assert.ok(root.innerHTML.includes('>Mon</div>'));
-  assert.equal((root.innerHTML.match(/class="heading day_style today"/g) || []).length, 1);
-  assert.equal((root.innerHTML.match(/class="day today"/g) || []).length, 1);
-  assert.equal((root.innerHTML.match(/class="current-time"/g) || []).length, 1);
-  assert.ok(root.innerHTML.includes(".current-time{position:absolute;left:44px;right:0;z-index:10;"));
-  assert.match(root.innerHTML, /class="current-time" style="top:[\d.]+px"/);
-  assert.match(root.innerHTML, /aria-label="Current time \d{2}:\d{2}"/);
-  card._config = normalizeConfig({ ...config, highlight_today_color: '#abc', 'current-time_color': '#123456' });
-  card._render();
-  assert.ok(root.innerHTML.includes('style="--today-marker-color:#abc;--current-time-color:#123456"'));
-  assert.ok(root.innerHTML.includes('var(--today-marker-color,var(--primary-color,#03a9f4))'));
-  assert.ok(root.innerHTML.includes('var(--current-time-color,var(--primary-color,#03a9f4))'));
-  card._config = config;
-  card._render();
-  card._config = normalizeConfig({ ...config, show_today: false, show_current_time: false });
-  card._render();
-  assert.equal((root.innerHTML.match(/class="heading day_style today"/g) || []).length, 0);
-  assert.equal((root.innerHTML.match(/class="day today"/g) || []).length, 0);
-  assert.equal((root.innerHTML.match(/class="current-time"/g) || []).length, 0);
-  card._config = config;
-  assert.ok(!root.innerHTML.includes('<button class="block'));
-  assert.ok(!root.innerHTML.includes('class="legend"'));
-  assert.ok(!root.innerHTML.includes('data-action="refresh"'));
-  assert.ok(root.innerHTML.includes('title="Mon, 00:00–24:00:'));
-  assert.ok(root.innerHTML.includes('class="schedule_name"'));
-  assert.ok(root.innerHTML.includes('class="schedule_time"'));
-  assert.ok(root.innerHTML.includes('block unknown')); 
-  card._hass.callService = async () => { throw new Error('offline'); };
-  await card._load();
-  assert.ok(card._error.includes('offline'));
-  assert.ok(root.innerHTML.includes('last successfully loaded schedule'));
-  let resolve;
-  card._hass.callService = () => new Promise(r => { resolve = r; });
-  const pending = card._load();
-  card.setConfig({ ...config, entity: 'schedule.other' });
-  resolve({ response: { 'schedule.test': raw } });
-  await pending;
-  assert.equal(card._week, null);
-  card.disconnectedCallback();
-});
-test('reload once after own helper dialog closes; ignore other dialogs and state changes', () => {
-  const { Card, config } = setup();
-  const card = new Card();
-  card.setConfig(config);
-  let loads = 0;
-  card._load = () => { loads++; };
-  const states = { 'schedule.test': { attributes: {} } };
-  card.hass = { connected: true, states };
-  assert.equal(loads, 1);
-  card.hass = { connected: true, states: { 'schedule.test': { attributes: {} } } };
-  assert.equal(loads, 1);
-  card._editing = true;
-  card._dialogClosed({ detail: { dialog: 'other-dialog' } });
-  assert.equal(loads, 1);
-  card._dialogClosed({ detail: { dialog: 'ha-more-info-dialog' } });
-  assert.equal(loads, 2);
-  card._dialogClosed({ detail: { dialog: 'ha-more-info-dialog' } });
-  assert.equal(loads, 2);
-  card.disconnectedCallback();
-});
-
-test('configuration validation, independent mappings and contrast', () => {
-  const { normalizeConfig, foreground, config, Card } = setup();
-  assert.equal(normalizeConfig(config).show_today, true);
-  assert.equal(normalizeConfig(config).show_current_time, true);
-  assert.equal(normalizeConfig(config).highlight_today_color, undefined);
-  assert.equal(normalizeConfig(config)['current-time_color'], undefined);
-  assert.equal(foreground('#fff'), '#000000');
-  assert.equal(foreground('#000000'), '#ffffff');
-  for (const patch of [{days: ['Mon']}, {data_key: ''}, {states: []}, {states: {x: {label: 'X', color: '#FF000'}}}, {entity: 'sensor.test'}, {show_today: 'false'}, {show_current_time: 0}, {highlight_today_color: 'blue'}, {'current-time_color': '#12'}]) {
-    assert.throws(() => normalizeConfig({...config, ...patch}));
+/* Minimal Schedule Viewer 0.1.8 — no dependencies. Install as a JavaScript module.
+ * type: custom:minimal-schedule-viewer
+ * entity: schedule.zeitplan_thermostate_wohnbereich
+ * Reads schedule.get_schedule; never writes schedule data.
+ */
+(() => {
+  "use strict";
+  const hasWindow = typeof window !== "undefined";
+  const hasDocument = typeof document !== "undefined";
+  const hasHTMLElement = typeof HTMLElement !== "undefined";
+  const hasCustomElements = typeof customElements !== "undefined";
+  if (!hasWindow) globalThis.window = globalThis;
+  if (!hasDocument) {
+    globalThis.document = {
+      hidden: false,
+      addEventListener() {},
+      removeEventListener() {},
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    };
   }
-  const first = new Card(), second = new Card();
-  first.setConfig(config);
-  second.setConfig({...config, days: ['Mo','Di','Mi','Do','Fr','Sa','So'], data_key: 'other'});
-  assert.equal(first._config.data_key, 'modus');
-  assert.equal(second._config.data_key, 'other');
-  assert.equal(first._config.days[0], 'Mon');
-  const proto = normalizeConfig({...config, states: JSON.parse('{"__proto__":{"label":"Safe","color":"#fff"}}')});
-  assert.equal(proto.states.__proto__.label, 'Safe');
-});
+  if (!hasHTMLElement) {
+    globalThis.HTMLElement = class {
+      attachShadow() {
+        return {
+          addEventListener() {},
+          querySelector() { return null; },
+          querySelectorAll() { return []; },
+          innerHTML: "",
+        };
+      }
+      dispatchEvent() { return true; }
+      get isConnected() { return true; }
+    };
+  }
+  if (!hasCustomElements) {
+    globalThis.customElements = {
+      get() { return undefined; },
+      define() {},
+    };
+  }
+  if (typeof ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+  }
+  if (typeof requestAnimationFrame !== "function") {
+    globalThis.requestAnimationFrame = (callback) => setTimeout(callback, 0);
+    globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  }
+  const VERSION = "0.1.8";
+  const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  const DEFAULT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  // Optional source-level typography adjustments.
+  const TEXT_STYLES = `
+    .day_style { font-size:13px; font-weight:600; }
+    .hour_style { font-size:12px; color:var(--primary-text-color); }
+    .schedule_name { font-size:12px; font-weight:500; line-height:14px; }
+    .schedule_time { visibility:hidden; font-size:12px; font-weight:400; line-height:14px; }
+  `;
+  const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const escape = (v) => String(v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const text = (v) => typeof v === "string" ? v : JSON.stringify(v) ?? String(v);
 
-test('missing values and typos are red; time hides only when vertically clipped', () => {
-  const { mode, Card } = setup();
-  assert.equal(mode({}).color, '#b71c1c');
-  assert.equal(mode({modus: 'komofrt'}).color, '#b71c1c');
-  assert.equal(mode({modus: 'komofrt'}).label, 'komofrt');
-  const card = new Card();
-  const box = {top: 0, bottom: 60, height: 60};
-  const line = {top: 14, bottom: 28, height: 14};
-  const time = {style: {}, clientWidth: 60, getBoundingClientRect: () => line, parentElement: {getBoundingClientRect: () => box}};
-  card.shadowRoot.querySelectorAll = () => [time];
-  card._fitTimes();
-  assert.equal(time.style.visibility, 'visible');
-  time.clientWidth = 100;
-  card._fitTimes();
-  assert.equal(time.style.visibility, 'visible');
-  box.bottom = 24; box.height = 24;
-  card._fitTimes();
-  assert.equal(time.style.visibility, 'hidden');
-  box.height = 0; line.height = 0;
-  card._fitTimes();
-  assert.equal(time.style.visibility, 'hidden');
-});
+  function time(value, end = false) {
+    if (typeof value !== "string") return NaN;
+    // HA serializes the end-of-day sentinel time.max this way.
+    if (end && value === "23:59:59.999999") return 1440;
+    const m = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/.exec(value);
+    if (!m) return NaN;
+    const h = +m[1], min = +m[2], sec = +(m[3] || 0) + +(m[4] ? `0.${m[4]}` : 0);
+    if (min > 59 || sec >= 60 || h > 24 || (h === 24 && (!end || min || sec))) return NaN;
+    return h * 60 + min + sec / 60;
+  }
+  const formatTime = (v) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(Math.floor(v % 60)).padStart(2, "0")}`;
+  const validColor = (value) => typeof value === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value);
+  function resolveTimeZone(hass) {
+    return hass?.config?.time_zone || hass?.config?.timezone || hass?.locale?.timezone || hass?.locale?.time_zone || Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  }
+  function getCurrentTimeInZone(date = new Date(), timeZone) {
+    const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone) {
+      const localDate = new Date(date);
+      return { today: (localDate.getDay() + 6) % 7, currentMinute: localDate.getHours() * 60 + localDate.getMinutes() };
+    }
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: zone,
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(date);
+      const fields = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+      const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(fields.weekday);
+      const minute = Number(fields.hour || 0) * 60 + Number(fields.minute || 0);
+      return { today: weekday >= 0 ? weekday : (new Date(date).getDay() + 6) % 7, currentMinute: minute };
+    } catch {
+      const localDate = new Date(date);
+      return { today: (localDate.getDay() + 6) % 7, currentMinute: localDate.getHours() * 60 + localDate.getMinutes() };
+    }
+  }
+  function getCurrentTimeTop(currentMinute, offset = 30, dayHeight = 288) {
+    return offset + (currentMinute / 1440) * dayHeight;
+  }
+  function normalizeConfig(config) {
+    if (!object(config) || typeof config.entity !== "string" || !/^schedule\.[a-z0-9_]+$/.test(config.entity)) {
+      throw new Error("Minimal Schedule Viewer: entity must be a schedule entity ID.");
+    }
+    if (typeof config.data_key !== "string" || !config.data_key.trim()) {
+      throw new Error("Minimal Schedule Viewer: data_key must be a non-empty string.");
+    }
+    const days = config.days === undefined ? DEFAULT_DAYS : config.days;
+    if (!Array.isArray(days) || days.length !== 7 || days.some(day => typeof day !== "string" || !day.trim())) {
+      throw new Error("Minimal Schedule Viewer: days must contain seven non-empty strings, Monday first.");
+    }
+    const showToday = config.show_today === undefined ? true : config.show_today;
+    const showCurrentTime = config.show_current_time === undefined ? true : config.show_current_time;
+    if (typeof showToday !== "boolean" || typeof showCurrentTime !== "boolean") {
+      throw new Error("Minimal Schedule Viewer: show_today and show_current_time must be booleans.");
+    }
+    const todayColor = config.highlight_today_color;
+    const currentTimeColor = config["current_time_color"] ?? config["current-time_color"];
+    if ((todayColor !== undefined && !validColor(todayColor)) ||
+        (currentTimeColor !== undefined && !validColor(currentTimeColor))) {
+      throw new Error("Minimal Schedule Viewer: highlight_today_color and current_time_color must be #RGB or #RRGGBB colors.");
+    }
+    if (!object(config.states)) throw new Error("Minimal Schedule Viewer: states must be a mapping.");
+    const states = Object.create(null);
+    for (const [value, entry] of Object.entries(config.states)) {
+      if (!object(entry) || typeof entry.label !== "string" || !validColor(entry.color)) {
+        throw new Error(`Minimal Schedule Viewer: states[${value}] needs a string label and a #RGB or #RRGGBB color.`);
+      }
+      states[value] = { label: entry.label, color: entry.color };
+    }
+    return { entity: config.entity, data_key: config.data_key, days: [...days], states, show_today: showToday, show_current_time: showCurrentTime, highlight_today_color: todayColor, "current_time_color": currentTimeColor };
+  }
+  // Choose black or white text using relative luminance for both HA themes.
+  function foreground(hex) {
+    const full = hex.length === 4 ? [...hex.slice(1)].map(c => c + c).join("") : hex.slice(1);
+    const channels = full.match(/../g).map(c => parseInt(c, 16) / 255)
+      .map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    return luminance > 0.179 ? "#000000" : "#ffffff";
+  }
+  const errorBlock = (detail) => ({ kind: "error", label: "Error", color: "#b71c1c", detail });
+  function mode(data, config) {
+    const value = object(data) && Object.hasOwn(data, config.data_key) ? data[config.data_key] : undefined;
+    if (value == null || (typeof value === "string" && !value.trim())) {
+      return { kind: "missing", label: "Missing value", color: "#b71c1c", detail: `${config.data_key} is missing or empty.`, mergeKey: "missing" };
+    }
+    const key = text(value);
+    if (["string", "number", "boolean"].includes(typeof value) && Object.hasOwn(config.states, key)) {
+      return { kind: "mapped", ...config.states[key], mergeKey: `${typeof value}:${key}` };
+    }
+    return { kind: "unknown", label: key, color: "#b71c1c", mergeKey: `${typeof value}:${key}` };
+  }
+  function parseWeek(raw, config) {
+    if (!object(raw)) throw new Error("Invalid weekly schedule response.");
+    return DAYS.map((key, index) => {
+      const name = config.days[index];
+      const errors = [], blocks = [];
+      if (!Array.isArray(raw[key])) {
+        errors.push(`${name}: Missing or invalid day data.`);
+      } else raw[key].forEach((entry, index) => {
+        const start = time(entry?.from), end = time(entry?.to, true);
+        if (!object(entry) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+          errors.push(`${name}, Block ${index + 1}: Missing or invalid times (${text(entry?.from)} – ${text(entry?.to)}).`);
+          return;
+        }
+        blocks.push({ start, end, ...mode(entry.data, config) });
+      });
+      blocks.sort((a, b) => a.start - b.start);
+      for (let i = 0; i < blocks.length; i++) {
+        for (let j = i + 1; j < blocks.length && blocks[j].start < blocks[i].end; j++) {
+          Object.assign(blocks[i], errorBlock("Overlapping time blocks."));
+          Object.assign(blocks[j], errorBlock("Overlapping time blocks."));
+          errors.push(`${name}: Overlapping time blocks at ${formatTime(blocks[j].start)}.`);
+        }
+      }
+      return { name, blocks, errors };
+    });
+  }
+
+  const STYLE = `
+    :host{display:block;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,Arial,sans-serif)}
+    *{box-sizing:border-box}ha-card{display:block;overflow:hidden;background:var(--ha-card-background,var(--card-background-color,#fff))}
+    header{display:flex;align-items:center;gap:8px;padding:8px 12px 4px}
+    h2{font-size:18px;font-weight:500;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    button.action{font:inherit;font-size:18px;color:inherit;border:0;background:transparent;padding:4px 8px;cursor:pointer;border-radius:6px;line-height:1.2}
+    button:focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:2px}
+    .status,.errors{margin:6px 12px;font-size:12px;overflow-wrap:anywhere}
+    .status{color:var(--secondary-text-color)}.errors{background:#b71c1c;color:#ffffff;padding:8px;border-radius:6px}.errors p{margin:3px 0}
+    .scroll{overflow-x:auto;overflow-y:visible;padding:0 8px 13px}
+    .week{min-width:280px;display:grid;grid-template-columns:44px repeat(7,minmax(0,1fr));padding-top:4px;position:relative;z-index:0;isolation:isolate}
+    .heading{text-align:center;font-size:13px;font-weight:600;height:26px;white-space:nowrap}
+    .heading.today{color:var(--today-marker-color,var(--primary-color,#03a9f4));background:color-mix(in srgb,var(--today-marker-color,var(--primary-color,#03a9f4)) 18%,transparent);border-bottom:2px solid var(--today-marker-color,var(--primary-color,#03a9f4))}
+    .axis,.day{height:288px;position:relative}
+    .axis{position:sticky;left:0;z-index:2;background:var(--ha-card-background,var(--card-background-color,#fff))}
+    .tick{position:absolute;right:4px;transform:translateY(-50%);font-size:12px;color:var(--primary-text-color)}
+    .day{border-left:1px solid var(--divider-color,#ddd);border-bottom:1px solid var(--divider-color,#ddd);background:repeating-linear-gradient(to bottom,var(--divider-color,#ddd) 0,var(--divider-color,#ddd) 1px,transparent 1px,transparent 36px)}
+    .day.today{background-color:color-mix(in srgb,var(--primary-color,#03a9f4) 14%,transparent)}
+    .day.today::after{content:"";position:absolute;inset:0;z-index:4;border-left:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));border-right:2px solid var(--today-marker-color,var(--primary-color,#03a9f4));pointer-events:none}
+    .current-time{position:absolute;left:44px;right:0;z-index:10;height:2px;background:var(--current-time-color,var(--primary-color,#03a9f4));pointer-events:none}
+    .current-time::before{content:"";position:absolute;left:-3px;top:-3px;width:8px;height:8px;border-radius:50%;background:inherit}
+    .blocks-layer{grid-column:2/9;grid-row:2;height:288px;position:relative;pointer-events:none;z-index:1}
+    .block{position:absolute;border-radius:2px;padding:0 2px;overflow:hidden;text-align:left;font-size:13px;line-height:14px;cursor:default;color:white;pointer-events:auto}
+    .schedule_name,.schedule_time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    ${TEXT_STYLES}
+  `;
+
+  function mergeWeekBlocks(week) {
+    const groups = [];
+    for (let dayIndex = 0; dayIndex < week.length; dayIndex++) {
+      const day = week[dayIndex];
+      const used = new Set();
+      for (const group of groups) {
+        if (group.endDay !== dayIndex - 1) continue;
+        const matchIndex = day.blocks.findIndex((block, index) => !used.has(index) &&
+          block.start === group.block.start && block.end === group.block.end &&
+          block.mergeKey === group.block.mergeKey && block.kind === group.block.kind);
+        if (matchIndex >= 0) {
+          used.add(matchIndex);
+          group.endDay = dayIndex;
+        }
+      }
+      day.blocks.forEach((block, index) => {
+        if (!used.has(index)) groups.push({ block, startDay: dayIndex, endDay: dayIndex });
+      });
+    }
+    return groups;
+  }
+
+  class MinimalScheduleViewer extends HTMLElement {
+    static version = VERSION;
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+      this._generation = 0;
+      this._refresh = () => { if (!document.hidden) void this._load(); };
+      this._dialogClosed = (event) => {
+        if (!this._editing || event.detail?.dialog !== "ha-more-info-dialog") return;
+        this._editing = false;
+        // Reload once when returning from the standard helper dialog.
+        this._generation++;
+        this._loading = false;
+        this._refresh();
+      };
+      this.shadowRoot.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-action='edit']");
+        if (!button) return;
+        this._editing = true;
+        this.dispatchEvent(new CustomEvent("hass-more-info", {
+          detail: { entityId: this._config.entity }, bubbles: true, composed: true,
+        }));
+      });
+    }
+
+    setConfig(config) {
+      this._config = normalizeConfig(config);
+      this._generation++;
+      this._loading = false;
+      this._week = null;
+      this._error = "";
+      this._render();
+      void this._load();
+    }
+    set hass(hass) {
+      const old = this._hass;
+      this._hass = hass;
+      const id = this._config?.entity;
+      if (!id) return;
+      if (old?.states[id] !== hass.states[id] || old?.connected !== hass.connected) {
+        this._render();
+        if (!old || (!old.states[id] && hass.states[id]) || (old.connected === false && hass.connected !== false)) {
+          void this._load();
+        }
+      }
+    }
+    connectedCallback() {
+      this._resizeObserver = new ResizeObserver(() => this._fitTimes());
+      this._observeSizes();
+      this._clockTimer = setInterval(() => this._render(), 60000);
+      document.addEventListener("visibilitychange", this._refresh);
+      window.addEventListener("dialog-closed", this._dialogClosed);
+      void this._load();
+    }
+    disconnectedCallback() {
+      this._resizeObserver?.disconnect();
+      cancelAnimationFrame(this._fitFrame);
+      clearInterval(this._clockTimer);
+      document.removeEventListener("visibilitychange", this._refresh);
+      window.removeEventListener("dialog-closed", this._dialogClosed);
+      this._editing = false;
+      this._generation++;
+      this._loading = false;
+    }
+    getCardSize() { return 7; }
+    getGridOptions() { return { columns: 12, min_columns: 6, rows: "auto" }; }
+    static getStubConfig(hass) {
+      return { entity: Object.keys(hass.states).find((id) => id.startsWith("schedule.")) || "schedule.example", data_key: "mode", states: { comfort: { label: "Comfort", color: "#2e8540" } } };
+    }
+    async _load() {
+      if (!this.isConnected || !this._hass || !this._config || this._loading || document.hidden) return;
+      const entity = this._config.entity;
+      if (!this._hass.states[entity] || this._hass.connected === false) { this._render(); return; }
+      const generation = this._generation;
+      this._loading = true;
+      this._render();
+      let timeout;
+      try {
+        const result = await Promise.race([
+          this._hass.callService("schedule", "get_schedule", {}, { entity_id: entity }, false, true),
+          new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Schedule request timed out.")), 15000); }),
+        ]);
+        if (generation !== this._generation) return;
+        // callService returns a WebSocket service result with a response field.
+        const response = result?.response;
+        if (!object(response) || !Object.hasOwn(response, entity)) {
+          throw new Error("schedule.get_schedule returned no response data for this entity.");
+        }
+        this._week = parseWeek(response[entity], this._config);
+        this._error = "";
+      } catch (error) {
+        if (generation !== this._generation) return;
+        this._error = `Unable to load schedule: ${error?.message || error?.code || String(error)} Check that schedule.get_schedule is available and your user has access.`;
+      } finally {
+        clearTimeout(timeout);
+        if (generation === this._generation) { this._loading = false; this._render(); }
+      }
+    }
+    _observeSizes() {
+      if (!this._resizeObserver) return;
+      this._resizeObserver.disconnect();
+      this._resizeObserver.observe(this);
+      for (const node of this.shadowRoot.querySelectorAll(".block, .schedule_name, .schedule_time")) {
+        this._resizeObserver.observe(node);
+      }
+    }
+    _fitTimes() {
+      // Compare actual rendered rectangles (including fractional pixels).
+      // Hidden/unfinished layouts must never count as a successful fit.
+      for (const time of this.shadowRoot.querySelectorAll(".schedule_time")) {
+        const block = time.parentElement.getBoundingClientRect();
+        const line = time.getBoundingClientRect();
+        time.style.visibility = block.height > 0 && line.height > 0 &&
+          line.top >= block.top && line.bottom <= block.bottom - 1 ? "visible" : "hidden";
+      }
+    }
+    _render() {
+      if (!this._config) return;
+      const entity = this._hass?.states[this._config.entity];
+      const title = entity?.attributes?.friendly_name || this._config.entity;
+      const timeZone = resolveTimeZone(this._hass);
+      const { today, currentMinute } = getCurrentTimeInZone(new Date(), timeZone);
+      const week = this.shadowRoot.querySelector(".week");
+      const firstDay = this.shadowRoot.querySelector(".day");
+      const offset = week && firstDay ? firstDay.getBoundingClientRect().top - week.getBoundingClientRect().top : 30;
+      const dayHeight = firstDay?.getBoundingClientRect().height || 288;
+      const currentTop = getCurrentTimeTop(currentMinute, offset, dayHeight);
+      const markerColors = [
+        this._config.highlight_today_color && `--today-marker-color:${this._config.highlight_today_color}`,
+        (this._config["current_time_color"] ?? this._config["current-time_color"]) && `--current-time-color:${this._config["current_time_color"] ?? this._config["current-time_color"]}`,
+      ].filter(Boolean).join(";");
+      const errors = this._week?.flatMap((day) => day.errors) || [];
+      const blocks = this._week ? mergeWeekBlocks(this._week) : [];
+      const issue = !this._hass ? "Waiting for Home Assistant …" : !entity ? `Entity ${this._config.entity} not found.`
+        : this._hass.connected === false ? "Disconnected from Home Assistant."
+        : this._error || (entity.state === "unavailable" ? "Schedule entity is unavailable." : "");
+      const scroll = this.shadowRoot.querySelector(".scroll")?.scrollLeft || 0;
+      this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
+        <header><h2 title="${escape(title)}">${escape(title)}</h2>
+        <button class="action" data-action="edit" aria-label="Open native schedule editor" title="Open native schedule editor">&gt;</button></header>
+        ${issue ? `<div class="errors" role="alert">${escape(issue)}${this._week ? " Showing the last successfully loaded schedule." : ""}</div>` : ""}
+        ${!this._week ? `<div class="status" role="status">${this._loading ? "Loading schedule …" : "No schedule loaded yet."}</div>` : ""}
+        ${errors.length ? `<div class="errors" role="alert">${errors.map((e) => `<p>${escape(e)}</p>`).join("")}</div>` : ""}
+        ${this._week ? `<div class="scroll" tabindex="0" aria-label="Weekly schedule, horizontally scrollable"><div class="week" style="${markerColors}">
+          <div></div>${this._config.days.map((name, index) => `<div class="heading day_style${this._config.show_today && index === today ? " today" : ""}">${escape(name)}</div>`).join("")}
+          <div class="axis">${Array.from({ length: 9 }, (_, index) => index * 3).map((hour) => `<span class="tick hour_style" style="top:${hour / 24 * 100}%">${String(hour).padStart(2, "0")}:00</span>`).join("")}</div>
+          ${this._week.map((day, index) => `<div class="day${this._config.show_today && index === today ? " today" : ""}" aria-label="${escape(day.name)}"></div>`).join("")}
+          <div class="blocks-layer">${blocks.map(({ block, startDay, endDay }) => {
+            const dayLabel = startDay === endDay ? this._week[startDay].name : `${this._week[startDay].name}–${this._week[endDay].name}`;
+            const span = endDay - startDay + 1;
+            const label = `${dayLabel}, ${formatTime(block.start)}–${formatTime(block.end)}: ${block.label}${block.detail ? ` (${block.detail})` : ""}`;
+            return `<div class="block ${block.kind}" style="left:calc(${startDay / 7 * 100}% + 1px);width:calc(${span / 7 * 100}% - 2px);top:${block.start / 1440 * 100}%;height:${(block.end - block.start) / 1440 * 100}%;background:${block.color};color:${foreground(block.color)}" title="${escape(label)}" aria-label="${escape(label)}"><strong class="schedule_name">${escape(block.label)}</strong><small class="schedule_time">${formatTime(block.start)}–${formatTime(block.end)}</small></div>`;
+          }).join("")}</div>${this._config.show_current_time ? `<div class="current-time" style="top:${currentTop}px" aria-label="Current time ${formatTime(currentMinute)}" title="Current time ${formatTime(currentMinute)}"></div>` : ""}</div></div>` : ""}
+      </ha-card>`;
+      const scroller = this.shadowRoot.querySelector(".scroll");
+      if (scroller) scroller.scrollLeft = scroll;
+      this._observeSizes();
+      cancelAnimationFrame(this._fitFrame);
+      this._fitFrame = requestAnimationFrame(() => this._fitTimes());
+    }
+  }
+  if (typeof customElements !== "undefined" && !customElements.get("minimal-schedule-viewer")) customElements.define("minimal-schedule-viewer", MinimalScheduleViewer);
+  const rootWindow = typeof window !== "undefined" ? window : globalThis;
+  rootWindow.customCards = rootWindow.customCards || [];
+  if (!rootWindow.customCards.some((card) => card.type === "minimal-schedule-viewer")) {
+    rootWindow.customCards.push({ type: "minimal-schedule-viewer", name: "Minimal Schedule Viewer", description: "Compact weekly timeline for native schedule helpers", preview: false });
+  }
+})();
